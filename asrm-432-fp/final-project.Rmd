@@ -1,0 +1,469 @@
+---
+title: "ASRM 432 Final Project"
+names: "Timmy Chinzorig, Shoun Lo, Molly Yetter, Eric Diaz"
+output: pdf_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RCurl)
+
+#importing data from repo
+url1 = getURL("https://raw.githubusercontent.com/shoun-lo/asrm-432-fp/main/train.txt")
+train_data = read_delim(url1, delim = "\t", escape_double = FALSE, col_names = FALSE, trim_ws = TRUE)
+
+url2 = getURL("https://raw.githubusercontent.com/shoun-lo/asrm-432-fp/main/predicts.txt")
+test_data = read_delim(url2, delim = "\t", escape_double = FALSE, col_names = FALSE, trim_ws = TRUE)
+
+url3 = getURL("https://raw.githubusercontent.com/shoun-lo/asrm-432-fp/main/targets.txt")
+target_data = read_delim(url3, delim = "\t", escape_double = FALSE, col_names = FALSE, trim_ws = TRUE)
+
+#splitting the training data
+#split the training data
+train_ind = sample(seq_len(nrow(train_data)), size = 4000)
+train = train_data[train_ind,]
+test = train_data[-train_ind,]
+```
+
+# Problem and Literature Review
+
+Applying linear model on the training split then plotting the results
+```{r}
+linearmod = lm(X86 ~., data = train)
+plot(linearmod)
+```
+
+## Classification Methods
+
+### Bagging and Random Forest
+#### Bagging
+```{r, include=FALSE}
+#apply bagging method
+library(randomForest)
+bagging = randomForest(as.factor(train$X86) ~., data = train, 
+                       mtry = 85, importance = TRUE)
+
+#plot out-of-bag error to find the best ntree
+plot(bagging, col = "darkorange")
+#ntree = 240 looks decent
+abline(v = 240)
+
+#bagging with the best ntree
+bagging = randomForest(as.factor(train$X86) ~., data = train, 
+                        ntree = 240, mtry = 85, importance = TRUE)
+
+
+
+bagging_pred = predict(bagging, newdata = test)
+
+#confusion matrix and accuracy (over the testing data)
+conf_tab_bg = table(Predicted = bagging_pred, Actual = test$X86)
+sum(diag(conf_tab_bg)) / sum(conf_tab_bg)
+
+#importance of vars. (Mean Decreasing Accuracy)
+importance = importance(bagging)
+importance[, 3:4] = abs(importance[, 3:4])
+importance = sort(importance[,3], decreasing = TRUE)
+head(importance, 10)
+
+
+#confusion matrix and accuracy (over the target data)
+bagging_pred_target = predict(bagging, newdata = test_data)
+conf_tab_bg_actual = table(Predicted = bagging_pred_target, Actual = target_data$X1)
+sum(diag(conf_tab_bg_actual)) / sum(conf_tab_bg_actual)
+```
+
+#### Random Forest
+```{r, include = FALSE}
+#tune mtry with ntree with ntree = 240
+tuned = tuneRF(x = train[, -86], y = as.factor(train$X86), 
+               ntreeTry = 240, mtryStart = 42, stepFactor = 1.5, trace = FALSE)
+
+#mtry's = 28, 42, 63
+mtry_values = c(28, 42, 63)
+
+#initialize accuracy vector
+accuracy_results = numeric(length(mtry_values))
+
+for (i in seq_along(mtry_values)) {
+  
+  #train rf model with mtry
+  rf_model = randomForest(as.factor(X86) ~ ., data = train, mtry = mtry_values[i])
+  
+  #predict on the test
+  rf_pred = predict(rf_model, newdata = test)
+  
+  #calculate accuracy
+  conf_tab_33 = table(Predicted = rf_pred, Actual = test$X86)
+  print(conf_tab_33)
+  accuracy = sum(diag(conf_tab_33)) / sum(conf_tab_33)
+  print(accuracy)
+  #store accuracy
+  accuracy_results[i] = accuracy
+}
+
+accuracy_results
+# 28 seems to be the best
+
+rf_model_best = randomForest(as.factor(X86) ~ ., data = train, mtry = 28)
+
+importance_rf = as_tibble(importance(rf_model_best)) |>
+  rownames_to_column("Var") |>
+  arrange(desc(MeanDecreaseGini)) |>
+  head(10)
+
+rf_pred_target = predict(rf_model, newdata = test_data)
+
+#confusion matrix and accuracy (over the target data)
+conf_tab_rf_target = table(Predicted = rf_pred_target, Actual = target_data$X1)
+sum(diag(conf_tab_rf_target)) / sum(conf_tab_rf_target)
+```
+
+### Linear Discriminant Analysis
+
+**Comment** Here I am running an initial naiveBayes classification model on the full training data set and fitting the model to check the results and accuracy against the data.
+```{r}
+set.seed(7)
+library(e1071)
+naivebayes_train <- naiveBayes(train$X86 ~ ., data = train, )
+
+naivebayes_train_fitted <- predict(naivebayes_train, newdata = train, type = "class")
+
+table(naivebayes_train_fitted, train$X86)
+```
+```{r}
+insample_accuracy <- (table(naivebayes_train_fitted, train$X86)[1,1] + table(naivebayes_train_fitted, train$X86)[2,2])/ dim(train)[1]
+print(insample_accuracy)
+```
+**Comment** The accuracy was very low demonstrating that the model did not explain the data well at all, below is a new naiveBayes model where it is trained using cross validation. The number of folds was set to 5 because of how large the data is, running more folds took significantly longer.
+```{r}
+library(caret)
+library(e1071)
+set.seed(7)
+ctrl <- trainControl(method = "cv", number = 5)
+nb_model <- train(x = train[, -86], y = as.factor(train$X86), method = "nb", trControl = ctrl)
+print(nb_model)
+```
+```{r}
+correlation_matrix <- cor(train)
+
+heatmap(correlation_matrix, 
+        Colv = NA, Rowv = NA,     # Turn off row and column clustering
+        col = colorRampPalette(c("blue", "white", "red"))(100),  # Color palette
+        scale = "none",           # Don't scale the data
+        main = "Heatmap of train Correlation Matrix")
+```
+
+
+**Comment** Naive Bayes assumes independence in the input variables of a class, this seems to be an assumption that can not be made about the data we have (heat map provided), so instead I want to see if either other Discriminant Analysis model works better with our data.
+```{r}
+library(MASS)
+
+training_lda <- lda(train$X86 ~ ., data = train)
+fitted_lda <- predict(training_lda, data = train)
+
+conf_matrix <- table(fitted_lda$class, train$X86)
+conf_matrix
+```
+```{r}
+insample_accuracy <- (table(fitted_lda$class, train$X86)[1,1] + table(fitted_lda$class, train$X86)[2,2]) / dim(train)[1]
+cat("In-sample Accuracy:", insample_accuracy, "\n")
+
+#checking other metrics
+TP <- conf_matrix[2,2]
+FP <- conf_matrix[1,2]
+TN <- conf_matrix[1,1]
+FN <- conf_matrix[2,1]
+#true negative rate
+specificity <- TN / (TN + FP)
+#true positive rate
+sensitivity <- TP / (TP + FN)
+#Positive predictive value
+precision <- TP / (TP + FP)
+
+cat("Specificity:", specificity, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Precision:", precision, "\n")
+```
+```{r}
+training_lda
+```
+**Comment** The LDA model fits the training set really well which could mean that the best decision boundary is a linear one and the matrix is best left common and not class specific
+
+**Comment** QDA does not seem to work with the data due to rank deficiency which would make sense because it also relates to high correlation in the data (similar problem to Naive Bayes), after trying these three, the Linear Discriminant Analysis and its assumptions fit our training data the best and therefore should be used for predictive purposes.
+```{r}
+library(ggplot2)
+
+conf_matrix <- table(fitted_lda$class, train$X86)
+
+conf_df <- as.data.frame.matrix(conf_matrix)
+
+conf_df$Predicted_Class <- rownames(conf_df)
+rownames(conf_df) <- NULL
+
+conf_df <- reshape2::melt(conf_df, id.vars = "Predicted_Class")
+
+ggplot(data = conf_df, aes(x = Predicted_Class, y = variable, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "blue") +
+  geom_text(aes(label = value)) +
+  labs(x = "Predicted Class", y = "Actual Class", title = "Confusion Matrix") +
+  theme_minimal()
+```
+**comment** running a stepwise regression to find the optimal model size with only the most significant input variables
+
+
+
+```{r}
+lm_data <- lm(train$X86 ~ ., data = train)
+model_opt <- step(lm_data)
+```
+
+
+
+**comment** taking the optimal model spit out from step regression and run lda on this one, check accuracy, and other metrics to compare with full model.
+```{r}
+#train_optimal <- lm(train$X86 ~ X9 + X10 + X12 + X16 + X17 + X21 + X23 + X24 + X25 + 
+    #X26 + X28 + X30 + X32 + X33 + X34 + X41 + X42 + X44 + X46 + 
+    #X47 + X49 + X55 + X57 + X58 + X59 + X60 + X61 + X62 + X70 + 
+    #X76 + X78 + X79 + X80 + X81 + X82 + X85, data = train)
+
+lda_train_opt <- lda(train$X86 ~ X9 + X10 + X12 + X16 + X17 + X21 + X23 + X24 + X25 + 
+    X26 + X28 + X30 + X32 + X33 + X34 + X41 + X42 + X44 + X46 + 
+    X47 + X49 + X55 + X57 + X58 + X59 + X60 + X61 + X62 + X70 + 
+    X76 + X78 + X79 + X80 + X81 + X82 + X85, data = train)
+fitted_opt <- predict(lda_train_opt, data = train)
+
+conf_matrix <- table(fitted_opt$class, train$X86)
+conf_matrix
+
+insample_accuracy <- (table(fitted_opt$class, train$X86)[1,1] + table(fitted_opt$class, train$X86)[2,2]) / dim(train)[1]
+cat("In-sample Accuracy:", insample_accuracy, "\n")
+
+#checking other metrics
+TP <- conf_matrix[2,2]
+FP <- conf_matrix[1,2]
+TN <- conf_matrix[1,1]
+FN <- conf_matrix[2,1]
+#true negative rate
+specificity <- TN / (TN + FP)
+#true positive rate
+sensitivity <- TP / (TP + FN)
+#Positive predictive value
+precision <- TP / (TP + FP)
+
+cat("Specificity:", specificity, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Precision:", precision, "\n")
+```
+
+
+**Comment** run the LDA function on the testing data and check the results and accuracy
+```{r}
+library(MASS)
+fitted_lda <- predict(lda_train_opt, newdata = test)
+
+table(fitted_lda$class, test$X86)
+
+conf_matrix <- table(fitted_lda$class, test$X86)
+
+insample_accuracy <- (table(fitted_lda$class, test$X86)[1,1] + table(fitted_lda$class, test$X86)[2,2]) / dim(test)[1]
+insample_accuracy
+
+#checking other metrics
+TP <- conf_matrix[2,2]
+FP <- conf_matrix[1,2]
+TN <- conf_matrix[1,1]
+FN <- conf_matrix[2,1]
+#true negative rate
+specificity <- TN / (TN + FP)
+#true positive rate
+sensitivity <- TP / (TP + FN)
+#Positive predictive value
+precision <- TP / (TP + FP)
+
+cat("Specificity:", specificity, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Precision:", precision, "\n")
+```
+
+### K-Nearest Neighbors
+```{r}
+# Normalize the data since KNN uses distance metrics.
+library(class)
+normalize <- function(x) {
+  return ((x - min(x)) / (max(x) - min(x)))
+}
+
+# Apply normalization to the training and testing datasets
+train_normalized <- as.data.frame(lapply(train[, -86], normalize))
+test_normalized <- as.data.frame(lapply(test[, -86], normalize))
+
+# Split the data into features and target variable
+train_features <- train_normalized
+train_target <- as.factor(train[[86]])  # Convert target variable to factor
+
+# Set up cross-validation for k optimization
+control <- trainControl(method = "cv", number = 10)
+
+# Define the range of k values to test
+grid <- expand.grid(.k = 1:10)  # Testing k from 1 to 10
+
+# Train the model with different values of k and select the best k
+knn_train <- train(x = train_features, y = train_target,
+                   method = "knn", tuneGrid = grid,
+                   trControl = control)
+
+# Print the best k value
+best_k <- knn_train$bestTune$k
+cat("Best k:", best_k, "\n")
+
+# Fit the KNN model with the best k to the training data
+knn_model <- knn(train = train_features, test = test_normalized,
+                 cl = train_target, k = best_k)
+
+# Evaluate the model by comparing its predictions to actual outcomes from test
+test_actual <- as.factor(test[[86]])  # Actual target values for the test set
+conf_matrix <- table(predicted = knn_model, actual = test_actual)
+print(conf_matrix)
+
+# Calculate accuracy
+accuracy <- sum(diag(conf_matrix)) / sum(conf_matrix)
+cat("Accuracy:", accuracy, "\n")
+
+# Calculate sensitivity and specificity
+sensitivity <- conf_matrix[2, 2] / sum(conf_matrix[2, ])
+specificity <- conf_matrix[1, 1] / sum(conf_matrix[1, ])
+cat("Sensitivity:", sensitivity, "\n")
+cat("Specificity:", specificity, "\n")
+
+# Plot accuracy versus different K values
+accuracy_plot <- ggplot(knn_train$results,
+                        aes(x = k, y = Accuracy)) +
+  geom_line() +
+  geom_point(shape = 21, fill = "blue") +
+  labs(title = "KNN Model Accuracy for Different K Values",
+       x = "Number of Neighbors (K)",
+       y = "Cross-Validated Accuracy") +
+  theme_minimal()
+
+print(accuracy_plot)
+```
+
+### Logistic Regression
+```{r}
+#Looking through the data, we find that the variables don't have their names assigned to the columns yet so we get the names off 
+#of the website dictionary and set the column names accordingly.
+#colnames(training_data) = c("MOSTYPE", "MAANTHUI", "MGEMOMV", "MGEMLEEF", "MOSHOOFD", "MGODRK", "MGODPR", "MGODOV", "MGODGE", "MRELGE", "MRELSA", "MRELOV", "MFALLEEN", "MFGEKIND", "MFWEKIND", "MOPLHOOG", "MOPLMIDD", "MOPLLAAG", "MBERHOOG", "MBERZELF", "MBERBOER", "MBERMIDD", "MBERARBG", "MBERARBO", "MSKA", "MSKB1", "MSKB2", "MSKC", "MSKD", "MHHUUR", "MHKOOP", "MAUT1", "MAUT2", "MAUT0", "MZFONDS", "MZPART", "MINKM30", "MINK3045", "MINK4575", "MINK7512", "MINK123M", "MINKGEM", "MKOOPKLA", "PWAPART", "PWABEDR", "PWALAND", "PPERSAUT", "PBESAUT", "PMOTSCO", "PVRAAUT", "PAANHANG", "PTRACTOR", "PWERKT", "PBROM", "PLEVEN", "PPERSONG", "PGEZONG", "PWAOREG", "PBRAND", "PZEILPL", "PPLEZIER", "PFIETS", "PINBOED", "PBYSTAND", "AWAPART", "AWABEDR", "AWALAND", "APERSAUT", "ABESAUT", "AMOTSCO", "AVRAAUT", "AAANHANG", "ATRACTOR", "AWERKT", "ABROM", "ALEVEN", "APERSONG", "AGEZONG", "AWAOREG", "ABRAND", "AZEILPL", "APLEZIER", "AFIETS", "AINBOED", "ABYSTAND", "CARAVAN")
+#colnames(training_data)
+
+#Here we are going to check if our response variables X86 which is the caravan variable is classified as a factor or not. 
+is.factor(train$X86)
+#We have confirmed that every variable is considered a numeric in the data as is and for the sake of consistency we will not alter the data globaly and rather just modify within function calls.
+#
+
+
+heatmap_full = heatmap(as.matrix(train))
+summary(heatmap_full)
+
+#Here we try running a glm with all of the variables to see what happens. Storing this model in "logistic_model_full".
+logistic_model_full = glm(X86 ~ ., data = train, family = "binomial")
+
+#Running a summary on "logistic_model".
+summary(logistic_model_full)
+
+#Get p-values for each coefficient
+p_values_full = summary(logistic_model_full)$coefficients[, 4]
+
+#Filter variables based on significance level of 0.05
+significant_variables_full = names(p_values_full)[p_values_full < 0.05]
+significant_variables_full
+
+
+#Using this "full" model we proceed to see what the model would predict based off the training dataset. 
+glm_predict_full = predict(logistic_model_full, test, type = 'response')
+head(glm_predict_full)
+
+#Classifying values that the predict function got above 0.5 as being TRUE or 1 and anything less to be FALSE or 0.
+predicted_caravan_full = ifelse(glm_predict_full >= 0.5, 1, 0)
+head(predicted_caravan_full)
+
+
+#Determining the accuracy of the full model
+accuracy_full = mean(predicted_caravan_full==test$X86)
+print(accuracy_full)
+
+conf_tab_rf_target = table(Predicted = predicted_caravan_full, Actual = test$X86)
+sum(diag(conf_tab_rf_target)) / sum(conf_tab_rf_target)
+
+#Making metrics
+TP <- conf_tab_rf_target[2,2]
+FP <- conf_tab_rf_target[1,2]
+TN <- conf_tab_rf_target[1,1]
+FN <- conf_tab_rf_target[2,1]
+
+#true negative rate
+specificity <- TN / (TN + FP)
+
+#true positive rate
+sensitivity <- TP / (TP + FN)
+
+#Positive predictive value
+precision <- TP / (TP + FP)
+
+cat("Specificity:", specificity, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Precision:", precision, "\n")
+
+#Now we are going to try model selection with the forward stepwise process using BIC as our metric.
+train$X86 = factor(train$X86)
+forward_model_bic = step(glm(X86 ~ 1, data = train, family = "binomial"), 
+                           direction = "forward", k = log(nrow(train)), trace = 1)
+summary(forward_model_bic)
+
+
+
+#Now we're going to try best selection
+best_step_bic = step(glm(X86 ~ ., data = train, family = "binomial"),
+                                direction = "both", k = log(nrow(train)), trace = 1)
+summary(best_step_bic)
+
+#Holy cow that took a long time, but we got the Model and it included the variables X12, X18, X47, X59, and X82. 
+
+#Using the "best" model we proceed to see what the model would predict based off the training dataset. 
+glm_predict_best = predict(best_step_bic, test, type = 'response')
+head(glm_predict_best)
+
+predicted_caravan_best = ifelse(glm_predict_best >= 0.5, 1, 0)
+head(predicted_caravan_full)
+
+
+#Determining the accuracy of the full model
+accuracy_best = mean(predicted_caravan_best==test$X86)
+print(accuracy_best)
+
+conf_tab_rf_target_best = table(Predicted = predicted_caravan_best, Actual = test$X86)
+sum(diag(conf_tab_rf_target_best)) / sum(conf_tab_rf_target_best)
+
+#Making metrics
+TP_best <- conf_tab_rf_target_best[2,2]
+FP_best <- conf_tab_rf_target_best[1,2]
+TN_best <- conf_tab_rf_target_best[1,1]
+FN_best <- conf_tab_rf_target_best[2,1]
+
+#true negative rate
+specificity_best <- TN_best / (TN_best + FP_best)
+
+#true positive rate
+sensitivity_best <- TP_best / (TP_best + FN_best)
+
+#Positive predictive value
+precision_best <- TP_best / (TP_best + FP_best)
+
+cat("Specificity:", specificity_best, "\n")
+cat("Sensitivity:", sensitivity_best, "\n")
+cat("Precision:", precision_best, "\n")
+```
+

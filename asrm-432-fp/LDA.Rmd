@@ -1,0 +1,201 @@
+---
+title: "Final Project Naive Bayes / Linear Discriminant Analysis"
+output: html_document
+date: "2024-04-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(RCurl)
+
+#importing data from repo
+url1 = getURL("https://raw.githubusercontent.com/shoun-lo/asrm-432-fp/main/train.txt")
+train_data = read_delim(url1, delim = "\t", escape_double = FALSE, col_names = FALSE, trim_ws = TRUE)
+
+url2 = getURL("https://raw.githubusercontent.com/shoun-lo/asrm-432-fp/main/predicts.txt")
+test_data = read_delim(url2, delim = "\t", escape_double = FALSE, col_names = FALSE, trim_ws = TRUE)
+
+url3 = getURL("https://raw.githubusercontent.com/shoun-lo/asrm-432-fp/main/targets.txt")
+target_data = read_delim(url3, delim = "\t", escape_double = FALSE, col_names = FALSE, trim_ws = TRUE)
+
+```
+
+```{r}
+train_ind = sample(seq_len(nrow(train_data)), size = 4000)
+train = train_data[train_ind,]
+test = train_data[-train_ind,]
+```
+
+```{r}
+summary(train)
+```
+
+
+**Comment** Here I am running an initial naiveBayes classification model on the full training data set and fitting the model to check the results and accuracy against the data.
+```{r}
+set.seed(7)
+library(e1071)
+naivebayes_train <- naiveBayes(train$X86 ~ ., data = train, )
+
+naivebayes_train_fitted <- predict(naivebayes_train, newdata = train, type = "class")
+
+table(naivebayes_train_fitted, train$X86)
+```
+```{r}
+insample_accuracy <- (table(naivebayes_train_fitted, train$X86)[1,1] + table(naivebayes_train_fitted, train$X86)[2,2])/ dim(train)[1]
+print(insample_accuracy)
+```
+**Comment** The accuracy was very low demonstrating that the model did not explain the data well at all, below is a new naiveBayes model where it is trained using cross validation. The number of folds was set to 5 because of how large the data is, running more folds took significantly longer.
+```{r}
+library(caret)
+library(e1071)
+set.seed(7)
+ctrl <- trainControl(method = "cv", number = 5)
+nb_model <- train(x = train[, -86], y = as.factor(train$X86), method = "nb", trControl = ctrl)
+print(nb_model)
+```
+```{r}
+correlation_matrix <- cor(train)
+
+heatmap(correlation_matrix, 
+        Colv = NA, Rowv = NA,     # Turn off row and column clustering
+        col = colorRampPalette(c("blue", "white", "red"))(100),  # Color palette
+        scale = "none",           # Don't scale the data
+        main = "Heatmap of train Correlation Matrix")
+```
+
+
+**Comment** Naive Bayes assumes independence in the input variables of a class, this seems to be an assumption that can not be made about the data we have (heat map provided), so instead I want to see if either other Discriminant Analysis model works better with our data.
+```{r}
+library(MASS)
+
+training_lda <- lda(train$X86 ~ ., data = train)
+fitted_lda <- predict(training_lda, data = train)
+
+conf_matrix <- table(fitted_lda$class, train$X86)
+conf_matrix
+```
+```{r}
+insample_accuracy <- (table(fitted_lda$class, train$X86)[1,1] + table(fitted_lda$class, train$X86)[2,2]) / dim(train)[1]
+cat("In-sample Accuracy:", insample_accuracy, "\n")
+
+#checking other metrics
+TP <- conf_matrix[2,2]
+FP <- conf_matrix[1,2]
+TN <- conf_matrix[1,1]
+FN <- conf_matrix[2,1]
+#true negative rate
+specificity <- TN / (TN + FP)
+#true positive rate
+sensitivity <- TP / (TP + FN)
+#Positive predictive value
+precision <- TP / (TP + FP)
+
+cat("Specificity:", specificity, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Precision:", precision, "\n")
+```
+```{r}
+training_lda
+```
+**Comment** The LDA model fits the training set really well which could mean that the best decision boundary is a linear one and the matrix is best left common and not class specific
+
+**Comment** QDA does not seem to work with the data due to rank deficiency which would make sense because it also relates to high correlation in the data (similar problem to Naive Bayes), after trying these three, the Linear Discriminant Analysis and its assumptions fit our training data the best and therefore should be used for predictive purposes.
+```{r}
+library(ggplot2)
+
+conf_matrix <- table(fitted_lda$class, train$X86)
+
+conf_df <- as.data.frame.matrix(conf_matrix)
+
+conf_df$Predicted_Class <- rownames(conf_df)
+rownames(conf_df) <- NULL
+
+conf_df <- reshape2::melt(conf_df, id.vars = "Predicted_Class")
+
+ggplot(data = conf_df, aes(x = Predicted_Class, y = variable, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient(low = "white", high = "blue") +
+  geom_text(aes(label = value)) +
+  labs(x = "Predicted Class", y = "Actual Class", title = "Confusion Matrix") +
+  theme_minimal()
+```
+**comment** running a stepwise regression to find the optimal model size with only the most significant input variables
+
+
+
+```{r}
+lm_data <- lm(train$X86 ~ ., data = train)
+model_opt <- step(lm_data)
+```
+
+
+
+**comment** taking the optimal model spit out from step regression and run lda on this one, check accuracy, and other metrics to compare with full model.
+```{r}
+#train_optimal <- lm(train$X86 ~ X9 + X10 + X12 + X16 + X17 + X21 + X23 + X24 + X25 + 
+    #X26 + X28 + X30 + X32 + X33 + X34 + X41 + X42 + X44 + X46 + 
+    #X47 + X49 + X55 + X57 + X58 + X59 + X60 + X61 + X62 + X70 + 
+    #X76 + X78 + X79 + X80 + X81 + X82 + X85, data = train)
+
+lda_train_opt <- lda(train$X86 ~ X9 + X10 + X12 + X16 + X17 + X21 + X23 + X24 + X25 + 
+    X26 + X28 + X30 + X32 + X33 + X34 + X41 + X42 + X44 + X46 + 
+    X47 + X49 + X55 + X57 + X58 + X59 + X60 + X61 + X62 + X70 + 
+    X76 + X78 + X79 + X80 + X81 + X82 + X85, data = train)
+fitted_opt <- predict(lda_train_opt, data = train)
+
+conf_matrix <- table(fitted_opt$class, train$X86)
+conf_matrix
+
+insample_accuracy <- (table(fitted_opt$class, train$X86)[1,1] + table(fitted_opt$class, train$X86)[2,2]) / dim(train)[1]
+cat("In-sample Accuracy:", insample_accuracy, "\n")
+
+#checking other metrics
+TP <- conf_matrix[2,2]
+FP <- conf_matrix[1,2]
+TN <- conf_matrix[1,1]
+FN <- conf_matrix[2,1]
+#true negative rate
+specificity <- TN / (TN + FP)
+#true positive rate
+sensitivity <- TP / (TP + FN)
+#Positive predictive value
+precision <- TP / (TP + FP)
+
+cat("Specificity:", specificity, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Precision:", precision, "\n")
+```
+
+
+**Comment** run the LDA function on the testing data and check the results and accuracy
+```{r}
+library(MASS)
+fitted_lda <- predict(lda_train_opt, newdata = test)
+
+table(fitted_lda$class, test$X86)
+
+conf_matrix <- table(fitted_lda$class, test$X86)
+
+insample_accuracy <- (table(fitted_lda$class, test$X86)[1,1] + table(fitted_lda$class, test$X86)[2,2]) / dim(test)[1]
+insample_accuracy
+
+#checking other metrics
+TP <- conf_matrix[2,2]
+FP <- conf_matrix[1,2]
+TN <- conf_matrix[1,1]
+FN <- conf_matrix[2,1]
+#true negative rate
+specificity <- TN / (TN + FP)
+#true positive rate
+sensitivity <- TP / (TP + FN)
+#Positive predictive value
+precision <- TP / (TP + FP)
+
+cat("Specificity:", specificity, "\n")
+cat("Sensitivity:", sensitivity, "\n")
+cat("Precision:", precision, "\n")
+```
+
+

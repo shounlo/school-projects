@@ -1,0 +1,15 @@
+## Author
+
+**Name:** Shoun Lo
+**E-mail:** shounlo2@illinois.edu
+
+## Purpose
+
+This application is to take specified inputs to produce two sets of comparative visualizations between NBA players with their respective offensive and defensive production for their team based on 538's RAPTOR metric in a easy-to-use manner. The coordinate graph is useful to see players who are outliers while the data table is useful to see the individual RAPTOR metric ratings of offensive and defensive production.
+
+## Data
+
+The data consists of a csv file with each row specifying a player's play-by-play statistics and ratings (such as RAPTOR) given a particular season, season type, and team. This data spans from 1977 up until 2022.
+
+## References
+- [FiveThirtyEight's RAPTOR Metric Data ](https://github.com/fivethirtyeight/data/tree/master/nba-raptor)
