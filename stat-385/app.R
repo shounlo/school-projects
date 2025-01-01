@@ -35,7 +35,7 @@ ui = navbarPage(
                  ticks = FALSE
                )
              ), 
-             mainPanel(plotOutput("Plot"))
+             mainPanel(plotOutput("Plot", height = "800px"))
            )
           ),
   
@@ -111,7 +111,7 @@ server = function(input, output) {
       aes(x = raptor_offense, y = raptor_defense, label = player_name) +
       labs(x = "RAPTOR Offense", y = "RAPTOR Defense") +
       geom_point(size = 3, shape = 21, fill = "white") +
-      geom_text(size = 2.6, nudge_y = 0.5) +
+      geom_text(size = 3, nudge_y = 0.5) +
       xlim(-10, 10) + 
       ylim(-10, 10) +
       theme_bw()
